@@ -49,8 +49,6 @@ spec:
         - name: oauth2-proxy
           image: oauth2_proxy
           env:
-            - name: OAUTH2_PROXY_DISCOVERY
-              value: kubernetes
             - name: OAUTH2_PROXY_CLIENT_ID
               valueFrom:
                 secretKeyRef:
