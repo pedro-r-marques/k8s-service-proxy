@@ -1,5 +1,7 @@
 # k8s-service-proxy
 
+[![Build Status](https://travis-ci.org/pedro-r-marques/k8s-service-proxy.svg?branch=master)](https://travis-ci.org/pedro-r-marques/k8s-service-proxy)
+
 HTTP Proxy for kubernetes services
 
 This process implements a simple HTTP proxy based on the golang [httputil] [ReverseProxy]

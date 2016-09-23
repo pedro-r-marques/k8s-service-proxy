@@ -3,3 +3,9 @@ language: go
 go:
   - 1.6
   - tip
+
+sudo: false
+
+script:
+  - go test -v ./pkg/...
+  - GOMAXPROCS=4 go test -timeout 60s -race ./pkg/...
