@@ -224,7 +224,9 @@ func (k *k8sServiceProxy) serviceChange(svc *v1.Service) {
 		k.Lock()
 		defer k.Unlock()
 		k.pathHandlers[endpoint.Path] = k.newProxyHandler(u, endpoint)
-		delete(k.pathHandlers, prev.Path)
+		if prev.Path != endpoint.Path {
+			delete(k.pathHandlers, prev.Path)
+		}
 		k.services[svcID] = endpoint
 	} else if endpoint != nil {
 		k.serviceAdd(svc)
