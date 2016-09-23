@@ -1,7 +1,13 @@
 package proxy
 
 import (
+	"fmt"
+	"log"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -9,19 +15,41 @@ import (
 	"k8s.io/client-go/1.4/pkg/watch"
 )
 
+func runTest(k8s *k8sServiceProxy, watcher watch.Interface, wg *sync.WaitGroup) {
+	for {
+		if !k8s.runOnce(watcher) {
+			break
+		}
+	}
+	wg.Done()
+}
+
+func makeTestURL(svc *v1.Service, endpoint *svcEndpoint) *url.URL {
+	schemeHost := fmt.Sprintf("http://localhost")
+	if endpoint.Port >= 0 {
+		schemeHost += fmt.Sprintf(":%d", endpoint.Port)
+	}
+
+	u, err := url.Parse(schemeHost)
+	if err != nil {
+		log.Print(err)
+		return nil
+	}
+	return u
+}
+
 func newTestProxy(wg *sync.WaitGroup) (*k8sServiceProxy, *watch.FakeWatcher) {
 	k8s := &k8sServiceProxy{
-		pathHandlers: make(map[string]http.Handler),
-		services:     make(map[string]*svcEndpoint),
+		pathHandlers:   make(map[string]http.Handler),
+		services:       make(map[string]*svcEndpoint),
+		defaultHandler: http.NotFoundHandler(),
+		makeServiceURL: makeTestURL,
 	}
 
 	watcher := watch.NewFake()
 	wg.Add(1)
 
-	go func() {
-		k8s.run(watcher)
-		wg.Done()
-	}()
+	go runTest(k8s, watcher, wg)
 
 	return k8s, watcher
 }
@@ -119,10 +147,7 @@ func TestServiceChange(t *testing.T) {
 
 	watcher = watch.NewFake()
 	wg.Add(1)
-	go func() {
-		k8s.run(watcher)
-		wg.Done()
-	}()
+	go runTest(k8s, watcher, &wg)
 
 	svc.ObjectMeta.Annotations[SvcProxyAnnotationPath] = "yyy"
 	watcher.Modify(svc)
@@ -139,5 +164,51 @@ func TestServiceChange(t *testing.T) {
 	path := svc.ObjectMeta.Annotations[SvcProxyAnnotationPath]
 	if _, exists := k8s.pathHandlers[path]; !exists {
 		t.Error(path)
+	}
+}
+
+func TestMapProxy(t *testing.T) {
+	var pathlist []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pathlist = append(pathlist, r.URL.Path)
+	}))
+	defer server.Close()
+
+	backendAddr := server.Listener.Addr()
+	backendAddrPieces := strings.Split(backendAddr.String(), ":")
+
+	var wg sync.WaitGroup
+	k8s, watcher := newTestProxy(&wg)
+	wg.Add(1)
+	watcher.Add(
+		&v1.Service{
+			ObjectMeta: v1.ObjectMeta{
+				Namespace: "default",
+				Name:      "foo",
+				Annotations: map[string]string{
+					SvcProxyAnnotationPath: "/foo/",
+					SvcProxyAnnotationPort: backendAddrPieces[1],
+					SvcProxyAnnotationMap:  "/bar/",
+				},
+			},
+		})
+
+	watcher.Stop()
+	wg.Done()
+
+	w := httptest.NewRecorder()
+	requestPaths := []string{
+		"http://example.com/foo",
+		"http://example.com/foo/",
+		"http://example.com/foo/x",
+	}
+	for _, p := range requestPaths {
+		req, _ := http.NewRequest("GET", p, nil)
+		k8s.ServeHTTP(w, req)
+	}
+
+	expected := []string{"/bar/", "/bar/x"}
+	if !reflect.DeepEqual(expected, pathlist) {
+		t.Error(pathlist)
 	}
 }

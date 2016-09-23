@@ -11,6 +11,7 @@ function loadTableContents(tableElement, response) {
         anchor.append(value.Path);
         row.append($('<td>').append(anchor));
         row.append($('<td>').append(value.Port));
+        row.append($('<td>').append(value.Map));
         row.append($('<td>').append(value.Description));
     });
 }
