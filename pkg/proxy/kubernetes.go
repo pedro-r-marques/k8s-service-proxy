@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"k8s.io/client-go/1.4/kubernetes"
@@ -30,6 +31,7 @@ type svcEndpoint struct {
 }
 
 type k8sServiceProxy struct {
+	sync.Mutex
 	pathHandlers   map[string]http.Handler
 	services       map[string]*svcEndpoint
 	defaultHandler http.Handler
@@ -90,12 +92,14 @@ func (k *k8sServiceProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	var bestMatch string
 	handler := k.defaultHandler
+	k.Lock()
 	for k, v := range k.pathHandlers {
 		if strings.HasPrefix(req.URL.Path, k) && len(k) > len(bestMatch) {
 			bestMatch = k
 			handler = v
 		}
 	}
+	k.Unlock()
 
 	handler.ServeHTTP(rw, req)
 }
@@ -188,6 +192,8 @@ func (k *k8sServiceProxy) serviceAdd(svc *v1.Service) {
 	}
 
 	u := k.makeServiceURL(svc, endpoint)
+	k.Lock()
+	defer k.Unlock()
 	k.pathHandlers[endpoint.Path] = k.newProxyHandler(u, endpoint)
 	k.services[svcID] = endpoint
 }
@@ -195,6 +201,8 @@ func (k *k8sServiceProxy) serviceAdd(svc *v1.Service) {
 func (k *k8sServiceProxy) serviceDelete(svc *v1.Service) {
 	svcID := svc.Namespace + "/" + svc.Name
 	log.Print("DELETE service ", svcID)
+	k.Lock()
+	defer k.Unlock()
 	if endpoint, exists := k.services[svcID]; exists {
 		delete(k.services, svcID)
 		delete(k.pathHandlers, endpoint.Path)
@@ -213,6 +221,8 @@ func (k *k8sServiceProxy) serviceChange(svc *v1.Service) {
 
 		log.Print("CHANGE service ", svcID)
 		u := k.makeServiceURL(svc, endpoint)
+		k.Lock()
+		defer k.Unlock()
 		k.pathHandlers[endpoint.Path] = k.newProxyHandler(u, endpoint)
 		delete(k.pathHandlers, prev.Path)
 		k.services[svcID] = endpoint

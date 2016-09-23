@@ -169,8 +169,10 @@ func TestServiceChange(t *testing.T) {
 
 func TestMapProxy(t *testing.T) {
 	var pathlist []string
+	var rqWait sync.WaitGroup
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		pathlist = append(pathlist, r.URL.Path)
+		rqWait.Done()
 	}))
 	defer server.Close()
 
@@ -196,6 +198,9 @@ func TestMapProxy(t *testing.T) {
 	watcher.Stop()
 	wg.Done()
 
+	expected := []string{"/bar/", "/bar/x"}
+	rqWait.Add(len(expected))
+
 	w := httptest.NewRecorder()
 	requestPaths := []string{
 		"http://example.com/foo",
@@ -207,7 +212,8 @@ func TestMapProxy(t *testing.T) {
 		k8s.ServeHTTP(w, req)
 	}
 
-	expected := []string{"/bar/", "/bar/x"}
+	rqWait.Wait()
+
 	if !reflect.DeepEqual(expected, pathlist) {
 		t.Error(pathlist)
 	}
