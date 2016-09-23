@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"k8s.io/client-go/1.4/kubernetes"
 	"k8s.io/client-go/1.4/pkg/api"
@@ -24,6 +25,7 @@ const SvcProxyHTTPPath = "/k8s-svc-proxy/"
 type svcEndpoint struct {
 	Path        string
 	Port        int32
+	Map         string
 	Description string
 }
 
@@ -31,6 +33,7 @@ type k8sServiceProxy struct {
 	pathHandlers   map[string]http.Handler
 	services       map[string]*svcEndpoint
 	defaultHandler http.Handler
+	makeServiceURL func(*v1.Service, *svcEndpoint) *url.URL
 }
 
 const (
@@ -44,14 +47,36 @@ const (
 	// SvcProxyAnnotationPort (optional) specifies the HTTP port to forward traffic to.
 	SvcProxyAnnotationPort = SvcProxyAnnotationPrefix + "port"
 
+	// SvcProxyAnnotationMap (optional) specifies a URL mapping by prefix.
+	SvcProxyAnnotationMap = SvcProxyAnnotationPrefix + "map"
+
 	// SvcProxyAnnotationDescription (optional) defines a human readable description for the service.
 	SvcProxyAnnotationDescription = SvcProxyAnnotationPrefix + "description"
 
 	discoveryStatusPage = SvcProxyHTTPPath + "discovery"
 )
 
-func (k *k8sServiceProxy) newProxyHandler(target *url.URL) http.Handler {
-	return httputil.NewSingleHostReverseProxy(target)
+func requestMapper(endpoint *svcEndpoint, target *url.URL, req *http.Request) {
+	req.URL.Scheme = target.Scheme
+	req.URL.Host = target.Host
+	req.URL.Path = endpoint.Map + req.URL.Path[len(endpoint.Path):]
+	// explicitly disable User-Agent so it's not set to default value
+	if _, ok := req.Header["User-Agent"]; !ok {
+		req.Header.Set("User-Agent", "")
+	}
+}
+
+func (k *k8sServiceProxy) newProxyHandler(target *url.URL, endpoint *svcEndpoint) http.Handler {
+	var proxy http.Handler
+	if endpoint.Map != "" {
+		director := func(req *http.Request) {
+			requestMapper(endpoint, target, req)
+		}
+		proxy = &httputil.ReverseProxy{Director: director}
+	} else {
+		proxy = httputil.NewSingleHostReverseProxy(target)
+	}
+	return proxy
 }
 
 // ServeHttp implements the http.Handler interface.
@@ -117,6 +142,9 @@ func makeSvcEndpoint(svc *v1.Service) *svcEndpoint {
 	if port, isSet := getServicePort(svc); isSet {
 		endpoint.Port = port
 	}
+	if mapPrefix, isSet := svc.Annotations[SvcProxyAnnotationMap]; isSet {
+		endpoint.Map = mapPrefix
+	}
 	if desc, isSet := svc.Annotations[SvcProxyAnnotationDescription]; isSet {
 		endpoint.Description = desc
 	}
@@ -159,8 +187,8 @@ func (k *k8sServiceProxy) serviceAdd(svc *v1.Service) {
 		return
 	}
 
-	u := makeServiceURL(svc, endpoint)
-	k.pathHandlers[endpoint.Path] = k.newProxyHandler(u)
+	u := k.makeServiceURL(svc, endpoint)
+	k.pathHandlers[endpoint.Path] = k.newProxyHandler(u, endpoint)
 	k.services[svcID] = endpoint
 }
 
@@ -184,8 +212,8 @@ func (k *k8sServiceProxy) serviceChange(svc *v1.Service) {
 		}
 
 		log.Print("CHANGE service ", svcID)
-		u := makeServiceURL(svc, endpoint)
-		k.pathHandlers[endpoint.Path] = k.newProxyHandler(u)
+		u := k.makeServiceURL(svc, endpoint)
+		k.pathHandlers[endpoint.Path] = k.newProxyHandler(u, endpoint)
 		delete(k.pathHandlers, prev.Path)
 		k.services[svcID] = endpoint
 	} else if endpoint != nil {
@@ -195,23 +223,46 @@ func (k *k8sServiceProxy) serviceChange(svc *v1.Service) {
 	}
 }
 
-func (k *k8sServiceProxy) run(watcher watch.Interface) {
-	var shutdown bool
-	for !shutdown {
-		select {
-		case ev, ok := <-watcher.ResultChan():
-			if !ok {
-				shutdown = true
-				break
+func (k *k8sServiceProxy) runOnce(watcher watch.Interface) bool {
+	select {
+	case ev, ok := <-watcher.ResultChan():
+		if !ok {
+			return false
+		}
+		switch ev.Type {
+		case watch.Added:
+			k.serviceAdd(ev.Object.(*v1.Service))
+		case watch.Deleted:
+			k.serviceDelete(ev.Object.(*v1.Service))
+		case watch.Modified:
+			k.serviceChange(ev.Object.(*v1.Service))
+		}
+	}
+	return true
+}
+
+const maxWatcherFailures = 3
+
+func (k *k8sServiceProxy) run(clientset *kubernetes.Clientset) {
+	watcher, err := clientset.Core().Services("").Watch(api.ListOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for {
+	LOOP:
+		ok := k.runOnce(watcher)
+		if !ok {
+			log.Print("k8s watcher channel closed")
+			var err error
+			for failures := 0; failures < maxWatcherFailures; failures++ {
+				watcher, err = clientset.Core().Services("").Watch(api.ListOptions{})
+				if err == nil {
+					goto LOOP
+				}
+				time.Sleep(5 * time.Second)
 			}
-			switch ev.Type {
-			case watch.Added:
-				k.serviceAdd(ev.Object.(*v1.Service))
-			case watch.Deleted:
-				k.serviceDelete(ev.Object.(*v1.Service))
-			case watch.Modified:
-				k.serviceChange(ev.Object.(*v1.Service))
-			}
+			log.Fatal(err)
 		}
 	}
 }
@@ -231,18 +282,14 @@ func NewKubernetesServiceProxy(mux http.Handler) http.Handler {
 		log.Fatal(err)
 	}
 
-	watcher, err := clientset.Core().Services("").Watch(api.ListOptions{})
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	k8s := &k8sServiceProxy{
 		pathHandlers:   make(map[string]http.Handler),
 		services:       make(map[string]*svcEndpoint),
 		defaultHandler: mux,
+		makeServiceURL: makeServiceURL,
 	}
 
-	go k8s.run(watcher)
+	go k8s.run(clientset)
 
 	return k8s
 }

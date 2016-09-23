@@ -1,4 +1,5 @@
 # k8s-service-proxy
+
 HTTP Proxy for kubernetes services
 
 This process implements a simple HTTP proxy based on the golang [httputil] [ReverseProxy]
@@ -11,7 +12,8 @@ in order to provide access to such information, it is useful to be able to expos
 service that performs authentication and demuxes requests to the backends.
 
 The service proxy expects services to define annotations such as:
-```
+
+```yaml
 apiVersion: v1
 kind: Service
 metadata:
@@ -27,13 +29,18 @@ For services that expose a single port, the proxy will automatically use the por
 the service configuration. Services that expose multiple ports are expected to use the
 annotation `k8s-svc-proxy.local/port` to specify the port number for the redirected traffic.
 
+URLs can be remapped by specifying the annotation `k8s-svc-proxy.local/map`. This causes the `path` prefix
+of a request to be replaced with the string specified by `map`. Note that the HTTP response is not
+processed in anyway. Any absolute `href` URLs will be incorrect.
+
 For diagnostic purposes, the proxy serves a status page. The annotation `k8s-svc-proxy.local/description`
 can be used to add human readable content to this page.
 
 ## Example configuration
 
 - k8s deployment:
-```
+
+```yaml
 apiVersion: extensions/v1beta1
 kind: Deployment
 metadata:
@@ -70,7 +77,8 @@ spec:
 ```
 
 - etc/oauth2_proxy.cfg
-```
+
+```text
 http_address = "0.0.0.0:4180"
 
 email_domains = [
@@ -81,7 +89,6 @@ upstreams = [
     "http://localhost:8080/",
 ]
 ```
-
 
 [oauth2]: https://github.com/bitly/oauth2_proxy
 [httputil]: https://golang.org/pkg/net/http/httputil/
