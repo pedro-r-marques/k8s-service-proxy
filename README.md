@@ -38,6 +38,13 @@ processed in anyway. Any absolute `href` URLs will be incorrect.
 For diagnostic purposes, the proxy serves a status page. The annotation `k8s-svc-proxy.local/description`
 can be used to add human readable content to this page.
 
+## Endpoints
+
+Services are often implemented by multiple Pods. These pods often have http listeners that provide information specific
+to the Pod (e.g. /debug). The annotation `"k8s-svc-proxy.local/endpoint-port"` automatically exposes the specified
+port in all the endpoints of the service as `"/endpoint/<namespace>/<svc-name>/<id>"` where id is an index automatically assigned
+by the alphabetic order of pod names.
+
 ## Example configuration
 
 - k8s deployment:
