@@ -15,9 +15,9 @@ import (
 	"k8s.io/client-go/1.4/pkg/watch"
 )
 
-func runTest(k8s *k8sServiceProxy, watcher watch.Interface, wg *sync.WaitGroup) {
+func runTest(k8s *k8sServiceProxy, svcWatcher, endpointWatcher watch.Interface, wg *sync.WaitGroup) {
 	for {
-		if !k8s.runOnce(watcher) {
+		if !k8s.runOnce(svcWatcher, endpointWatcher) {
 			break
 		}
 	}
@@ -38,25 +38,27 @@ func makeTestURL(svc *v1.Service, endpoint *svcEndpoint) *url.URL {
 	return u
 }
 
-func newTestProxy(wg *sync.WaitGroup) (*k8sServiceProxy, *watch.FakeWatcher) {
+func newTestProxy(wg *sync.WaitGroup) (*k8sServiceProxy, *watch.FakeWatcher, *watch.FakeWatcher) {
 	k8s := &k8sServiceProxy{
 		pathHandlers:   make(map[string]http.Handler),
 		services:       make(map[string]*svcEndpoint),
+		endpoints:      make(map[string]*endpointData),
 		defaultHandler: http.NotFoundHandler(),
 		makeServiceURL: makeTestURL,
 	}
 
-	watcher := watch.NewFake()
+	svcWatcher := watch.NewFake()
+	endpointWatcher := watch.NewFake()
 	wg.Add(1)
 
-	go runTest(k8s, watcher, wg)
+	go runTest(k8s, svcWatcher, endpointWatcher, wg)
 
-	return k8s, watcher
+	return k8s, svcWatcher, endpointWatcher
 }
 
 func TestServiceAdd(t *testing.T) {
 	var wg sync.WaitGroup
-	k8s, watcher := newTestProxy(&wg)
+	k8s, watcher, _ := newTestProxy(&wg)
 
 	watcher.Add(
 		&v1.Service{
@@ -82,7 +84,7 @@ func TestServiceAdd(t *testing.T) {
 
 func TestServiceDelete(t *testing.T) {
 	var wg sync.WaitGroup
-	k8s, watcher := newTestProxy(&wg)
+	k8s, watcher, _ := newTestProxy(&wg)
 
 	services := []*v1.Service{
 		&v1.Service{
@@ -131,7 +133,7 @@ func TestServiceDelete(t *testing.T) {
 
 func TestServiceChange(t *testing.T) {
 	var wg sync.WaitGroup
-	k8s, watcher := newTestProxy(&wg)
+	k8s, svcWatcher, endpointWatcher := newTestProxy(&wg)
 
 	svc := &v1.Service{
 		ObjectMeta: v1.ObjectMeta{
@@ -141,18 +143,18 @@ func TestServiceChange(t *testing.T) {
 		},
 	}
 
-	watcher.Add(svc)
-	watcher.Stop()
+	svcWatcher.Add(svc)
+	svcWatcher.Stop()
 	wg.Wait()
 
-	watcher = watch.NewFake()
+	svcWatcher = watch.NewFake()
 	wg.Add(1)
-	go runTest(k8s, watcher, &wg)
+	go runTest(k8s, svcWatcher, endpointWatcher, &wg)
 
 	svc.ObjectMeta.Annotations[SvcProxyAnnotationPath] = "yyy"
-	watcher.Modify(svc)
+	svcWatcher.Modify(svc)
 
-	watcher.Stop()
+	svcWatcher.Stop()
 	wg.Wait()
 
 	if len(k8s.services) != 1 {
@@ -169,10 +171,8 @@ func TestServiceChange(t *testing.T) {
 
 func TestMapProxy(t *testing.T) {
 	var pathlist []string
-	var rqWait sync.WaitGroup
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		pathlist = append(pathlist, r.URL.Path)
-		rqWait.Done()
 	}))
 	defer server.Close()
 
@@ -180,7 +180,7 @@ func TestMapProxy(t *testing.T) {
 	backendAddrPieces := strings.Split(backendAddr.String(), ":")
 
 	var wg sync.WaitGroup
-	k8s, watcher := newTestProxy(&wg)
+	k8s, watcher, _ := newTestProxy(&wg)
 	wg.Add(1)
 	watcher.Add(
 		&v1.Service{
@@ -199,22 +199,186 @@ func TestMapProxy(t *testing.T) {
 	wg.Done()
 
 	expected := []string{"/bar/", "/bar/x"}
-	rqWait.Add(len(expected))
 
-	w := httptest.NewRecorder()
 	requestPaths := []string{
 		"http://example.com/foo",
 		"http://example.com/foo/",
 		"http://example.com/foo/x",
 	}
 	for _, p := range requestPaths {
+		w := httptest.NewRecorder()
 		req, _ := http.NewRequest("GET", p, nil)
 		k8s.ServeHTTP(w, req)
+		log.Printf("%s: %d", p, w.Code)
 	}
-
-	rqWait.Wait()
 
 	if !reflect.DeepEqual(expected, pathlist) {
 		t.Error(pathlist)
 	}
+}
+
+func TestEndpointAddDelete(t *testing.T) {
+	var wg sync.WaitGroup
+	k8s, svcWatch, endpointWatch := newTestProxy(&wg)
+
+	svc := &v1.Service{
+		ObjectMeta: v1.ObjectMeta{
+			Namespace:   "default",
+			Name:        "foo",
+			Annotations: map[string]string{SvcProxyAnnotationEndpoint: "8080"},
+		},
+	}
+
+	endpoints := &v1.Endpoints{
+		ObjectMeta: v1.ObjectMeta{
+			Namespace: "default",
+			Name:      "foo",
+		},
+		Subsets: []v1.EndpointSubset{
+			v1.EndpointSubset{
+				Addresses: []v1.EndpointAddress{
+					v1.EndpointAddress{
+						IP: "127.0.0.1",
+						TargetRef: &v1.ObjectReference{
+							Kind: "Pod",
+							Name: "foo-xyz",
+						},
+					},
+				},
+			},
+			v1.EndpointSubset{
+				NotReadyAddresses: []v1.EndpointAddress{
+					v1.EndpointAddress{
+						IP: "8.8.8.8",
+						TargetRef: &v1.ObjectReference{
+							Kind: "Pod",
+							Name: "foo-aaa",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	svcWatch.Add(svc)
+	endpointWatch.Add(endpoints)
+	svcWatch.Stop()
+	endpointWatch.Stop()
+	wg.Wait()
+
+	podEndpoints, exists := k8s.endpoints["default/foo"]
+	if !exists {
+		t.Fatal("No endpoints present")
+	}
+
+	var actual []string
+	for _, ep := range podEndpoints.endpoints {
+		actual = append(actual, ep.PodName)
+	}
+
+	expected := []string{"foo-aaa", "foo-xyz"}
+	if !reflect.DeepEqual(actual, expected) {
+		t.Error(actual)
+	}
+
+	svcWatch = watch.NewFake()
+	endpointWatch = watch.NewFake()
+	wg.Add(1)
+	go runTest(k8s, svcWatch, endpointWatch, &wg)
+
+	endpointWatch.Delete(endpoints)
+	endpointWatch.Stop()
+	wg.Wait()
+
+	if len(podEndpoints.endpoints) != 0 {
+		t.Error(podEndpoints.endpoints)
+	}
+}
+
+func TestEndpointProxy(t *testing.T) {
+	var pathlist []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pathlist = append(pathlist, r.URL.Path)
+	}))
+	defer server.Close()
+
+	backendAddr := server.Listener.Addr()
+	backendAddrPieces := strings.Split(backendAddr.String(), ":")
+	log.Print("backend ", backendAddr.String())
+
+	var wg sync.WaitGroup
+	k8s, svcWatch, endpointWatch := newTestProxy(&wg)
+
+	svc := &v1.Service{
+		ObjectMeta: v1.ObjectMeta{
+			Namespace:   "default",
+			Name:        "foo",
+			Annotations: map[string]string{SvcProxyAnnotationEndpoint: backendAddrPieces[1]},
+		},
+	}
+
+	endpoints := &v1.Endpoints{
+		ObjectMeta: v1.ObjectMeta{
+			Namespace: "default",
+			Name:      "foo",
+		},
+		Subsets: []v1.EndpointSubset{
+			v1.EndpointSubset{
+				Addresses: []v1.EndpointAddress{
+					v1.EndpointAddress{
+						IP: "127.0.0.1",
+						TargetRef: &v1.ObjectReference{
+							Kind: "Pod",
+							Name: "foo-xyz",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	svcWatch.Add(svc)
+	endpointWatch.Add(endpoints)
+
+	svcWatch.Stop()
+	wg.Wait()
+
+	if len(k8s.endpoints) != 1 {
+		t.Fatal(len(k8s.endpoints))
+	}
+
+	expected := []string{"/debug/varz", "/"}
+
+	requestPaths := []string{
+		"http://localhost/endpoint/default/foo/0/debug/varz",
+		"http://localhost/endpoint/default/foo/0/",
+	}
+	for _, p := range requestPaths {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", p, nil)
+		k8s.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Error(w.Body.String())
+		}
+	}
+
+	if !reflect.DeepEqual(expected, pathlist) {
+		t.Error(pathlist)
+	}
+
+	badRequests := []string{
+		"http://localhost/endpoint/default/bar/0/debug/varz",
+		"http://localhost/endpoint/default/foo/1",
+		"http://localhost/endpoint/default/foo",
+	}
+	for _, p := range badRequests {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", p, nil)
+		k8s.ServeHTTP(w, req)
+		log.Printf("%s %d", p, w.Code)
+		if w.Code == http.StatusOK {
+			t.Error(w.Code)
+		}
+	}
+
 }
