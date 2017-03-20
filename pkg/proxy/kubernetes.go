@@ -29,6 +29,7 @@ type svcEndpoint struct {
 	Port        int32
 	Map         string
 	Description string
+	handler     http.Handler
 }
 
 type podEndpoint struct {
@@ -313,13 +314,14 @@ func (k *k8sServiceProxy) serviceAdd(svc *v1.Service) {
 
 	if _, dup := k.pathHandlers[endpoint.Path]; dup {
 		log.Printf("Duplicate %s annotation for %s: %s/%s", SvcProxyAnnotationPath, endpoint.Path, svc.Namespace, svc.Name)
-		return
 	}
 
 	u := k.makeServiceURL(svc, endpoint)
+	endpoint.handler = k.newProxyHandler(u, endpoint)
+
 	k.Lock()
 	defer k.Unlock()
-	k.pathHandlers[endpoint.Path] = k.newProxyHandler(u, endpoint)
+	k.pathHandlers[endpoint.Path] = endpoint.handler
 	k.services[svcID] = endpoint
 }
 
@@ -330,7 +332,9 @@ func (k *k8sServiceProxy) serviceDelete(svc *v1.Service) {
 	defer k.Unlock()
 	if endpoint, exists := k.services[svcID]; exists {
 		delete(k.services, svcID)
-		delete(k.pathHandlers, endpoint.Path)
+		if k.pathHandlers[endpoint.Path] == endpoint.handler {
+			delete(k.pathHandlers, endpoint.Path)
+		}
 	}
 }
 
@@ -346,10 +350,11 @@ func (k *k8sServiceProxy) serviceChange(svc *v1.Service) {
 
 		log.Print("CHANGE service ", svcID)
 		u := k.makeServiceURL(svc, endpoint)
+		endpoint.handler = k.newProxyHandler(u, endpoint)
 		k.Lock()
 		defer k.Unlock()
-		k.pathHandlers[endpoint.Path] = k.newProxyHandler(u, endpoint)
-		if prev.Path != endpoint.Path {
+		k.pathHandlers[endpoint.Path] = endpoint.handler
+		if prev.Path != endpoint.Path && k.pathHandlers[prev.Path] == prev.handler {
 			delete(k.pathHandlers, prev.Path)
 		}
 		k.services[svcID] = endpoint
