@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -169,6 +170,154 @@ func TestServiceChange(t *testing.T) {
 	}
 }
 
+func TestServicePathSwap(t *testing.T) {
+	var wg sync.WaitGroup
+	k8s, svcWatcher, endpointWatcher := newTestProxy(&wg)
+
+	svcA := &v1.Service{
+		ObjectMeta: v1.ObjectMeta{
+			Namespace:   "namespace-a",
+			Name:        "foo",
+			Annotations: map[string]string{SvcProxyAnnotationPath: "prod/foo"},
+		},
+	}
+	svcB := &v1.Service{
+		ObjectMeta: v1.ObjectMeta{
+			Namespace:   "namespace-b",
+			Name:        "foo",
+			Annotations: map[string]string{SvcProxyAnnotationPath: "staging/foo"},
+		},
+	}
+
+	svcWatcher.Add(svcA)
+	svcWatcher.Add(svcB)
+	svcWatcher.Stop()
+	wg.Wait()
+
+	svcA.ObjectMeta.Annotations[SvcProxyAnnotationPath], svcB.ObjectMeta.Annotations[SvcProxyAnnotationPath] =
+		svcB.ObjectMeta.Annotations[SvcProxyAnnotationPath], svcA.ObjectMeta.Annotations[SvcProxyAnnotationPath]
+
+	svcWatcher = watch.NewFake()
+	go runTest(k8s, svcWatcher, endpointWatcher, &wg)
+
+	wg.Add(1)
+	svcWatcher.Modify(svcA)
+	svcWatcher.Modify(svcB)
+	svcWatcher.Stop()
+	wg.Wait()
+
+	var paths []string
+	for path := range k8s.pathHandlers {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	expected := []string{
+		"prod/foo",
+		"staging/foo",
+	}
+	if !reflect.DeepEqual(paths, expected) {
+		t.Error(paths)
+	}
+}
+
+func TestServicePathChangeDelete(t *testing.T) {
+	var wg sync.WaitGroup
+	k8s, svcWatcher, endpointWatcher := newTestProxy(&wg)
+
+	svcA := &v1.Service{
+		ObjectMeta: v1.ObjectMeta{
+			Namespace:   "namespace-a",
+			Name:        "foo",
+			Annotations: map[string]string{SvcProxyAnnotationPath: "prod/foo"},
+		},
+	}
+	svcB := &v1.Service{
+		ObjectMeta: v1.ObjectMeta{
+			Namespace:   "namespace-b",
+			Name:        "foo",
+			Annotations: map[string]string{SvcProxyAnnotationPath: "staging/foo"},
+		},
+	}
+
+	svcWatcher.Add(svcA)
+	svcWatcher.Add(svcB)
+	svcWatcher.Stop()
+	wg.Wait()
+
+	svcB.ObjectMeta.Annotations[SvcProxyAnnotationPath] = svcA.ObjectMeta.Annotations[SvcProxyAnnotationPath]
+
+	svcWatcher = watch.NewFake()
+	go runTest(k8s, svcWatcher, endpointWatcher, &wg)
+
+	wg.Add(1)
+	svcWatcher.Modify(svcB)
+	svcWatcher.Delete(svcA)
+	svcWatcher.Stop()
+	wg.Wait()
+
+	var paths []string
+	for path := range k8s.pathHandlers {
+		paths = append(paths, path)
+	}
+
+	expected := []string{
+		"prod/foo",
+	}
+	if !reflect.DeepEqual(paths, expected) {
+		t.Error(paths)
+	}
+}
+
+func TestServiceAddPathConflict(t *testing.T) {
+	var wg sync.WaitGroup
+	k8s, svcWatcher, endpointWatcher := newTestProxy(&wg)
+
+	svcA := &v1.Service{
+		ObjectMeta: v1.ObjectMeta{
+			Namespace:   "namespace-a",
+			Name:        "foo",
+			Annotations: map[string]string{SvcProxyAnnotationPath: "prod/foo"},
+		},
+	}
+	svcB := &v1.Service{
+		ObjectMeta: v1.ObjectMeta{
+			Namespace:   "namespace-b",
+			Name:        "foo",
+			Annotations: map[string]string{SvcProxyAnnotationPath: "prod/foo"},
+		},
+	}
+
+	svcWatcher.Add(svcA)
+	svcWatcher.Add(svcB)
+	svcWatcher.Stop()
+	wg.Wait()
+
+	svcA.ObjectMeta.Annotations[SvcProxyAnnotationPath] = "staging/foo"
+	svcWatcher = watch.NewFake()
+	go runTest(k8s, svcWatcher, endpointWatcher, &wg)
+
+	wg.Add(1)
+	svcWatcher.Modify(svcA)
+
+	svcWatcher.Stop()
+	wg.Wait()
+
+	var paths []string
+	for path := range k8s.pathHandlers {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	expected := []string{
+		"prod/foo",
+		"staging/foo",
+	}
+	if !reflect.DeepEqual(paths, expected) {
+		t.Error(paths)
+	}
+}
+
 func TestMapProxy(t *testing.T) {
 	var pathlist []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -181,7 +330,6 @@ func TestMapProxy(t *testing.T) {
 
 	var wg sync.WaitGroup
 	k8s, watcher, _ := newTestProxy(&wg)
-	wg.Add(1)
 	watcher.Add(
 		&v1.Service{
 			ObjectMeta: v1.ObjectMeta{
@@ -196,7 +344,7 @@ func TestMapProxy(t *testing.T) {
 		})
 
 	watcher.Stop()
-	wg.Done()
+	wg.Wait()
 
 	expected := []string{"/bar/", "/bar/x"}
 
