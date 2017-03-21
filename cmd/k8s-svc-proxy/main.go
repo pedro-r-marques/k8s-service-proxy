@@ -3,8 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"path/filepath"
 
 	"github.com/pedro-r-marques/k8s-service-proxy/pkg/proxy"
 )
@@ -29,7 +31,16 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle(proxy.SvcProxyHTTPPath, http.FileServer(http.Dir(opt.HTTPStaticDir)))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, proxy.SvcProxyHTTPPath+"status.html", http.StatusSeeOther)
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, proxy.SvcProxyHTTPPath+"status.html", http.StatusSeeOther)
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+			if msg, err := ioutil.ReadFile(filepath.Join(opt.HTTPStaticDir, proxy.SvcProxyHTTPPath+"error_404.html")); err == nil {
+				w.Write(msg)
+			} else {
+				log.Println(err)
+			}
+		}
 	})
 	svcProxy := proxy.NewKubernetesServiceProxy(mux)
 	http.ListenAndServe(fmt.Sprintf(":%d", opt.Port), svcProxy)
