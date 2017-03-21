@@ -51,7 +51,7 @@ type endpointData struct {
 
 type k8sServiceProxy struct {
 	sync.Mutex
-	pathHandlers   map[string]http.Handler
+	pathHandlers   map[string][]http.Handler
 	services       map[string]*svcEndpoint
 	endpoints      map[string]*endpointData
 	defaultHandler http.Handler
@@ -193,7 +193,7 @@ func (k *k8sServiceProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	for k, v := range k.pathHandlers {
 		if strings.HasPrefix(req.URL.Path, k) && len(k) > len(bestMatch) {
 			bestMatch = k
-			handler = v
+			handler = v[0]
 		}
 	}
 	k.Unlock()
@@ -295,6 +295,17 @@ func makeServiceURL(svc *v1.Service, endpoint *svcEndpoint) *url.URL {
 	return u
 }
 
+func handlerListRemove(list []http.Handler, element http.Handler) []http.Handler {
+	for i, h := range list {
+		if h == element {
+			list[i] = list[len(list)-1]
+			list = list[:len(list)-1]
+			break
+		}
+	}
+	return list
+}
+
 func (k *k8sServiceProxy) serviceAdd(svc *v1.Service) {
 	endpoint := makeSvcEndpoint(svc)
 	if endpoint == nil {
@@ -321,7 +332,7 @@ func (k *k8sServiceProxy) serviceAdd(svc *v1.Service) {
 
 	k.Lock()
 	defer k.Unlock()
-	k.pathHandlers[endpoint.Path] = endpoint.handler
+	k.pathHandlers[endpoint.Path] = append(k.pathHandlers[endpoint.Path], endpoint.handler)
 	k.services[svcID] = endpoint
 }
 
@@ -332,7 +343,8 @@ func (k *k8sServiceProxy) serviceDelete(svc *v1.Service) {
 	defer k.Unlock()
 	if endpoint, exists := k.services[svcID]; exists {
 		delete(k.services, svcID)
-		if k.pathHandlers[endpoint.Path] == endpoint.handler {
+		k.pathHandlers[endpoint.Path] = handlerListRemove(k.pathHandlers[endpoint.Path], endpoint.handler)
+		if len(k.pathHandlers[endpoint.Path]) == 0 {
 			delete(k.pathHandlers, endpoint.Path)
 		}
 	}
@@ -353,8 +365,9 @@ func (k *k8sServiceProxy) serviceChange(svc *v1.Service) {
 		endpoint.handler = k.newProxyHandler(u, endpoint)
 		k.Lock()
 		defer k.Unlock()
-		k.pathHandlers[endpoint.Path] = endpoint.handler
-		if prev.Path != endpoint.Path && k.pathHandlers[prev.Path] == prev.handler {
+		k.pathHandlers[prev.Path] = handlerListRemove(k.pathHandlers[prev.Path], prev.handler)
+		k.pathHandlers[endpoint.Path] = append(k.pathHandlers[endpoint.Path], endpoint.handler)
+		if len(k.pathHandlers[prev.Path]) == 0 {
 			delete(k.pathHandlers, prev.Path)
 		}
 		k.services[svcID] = endpoint
@@ -551,7 +564,7 @@ func NewKubernetesServiceProxy(mux http.Handler) http.Handler {
 	}
 
 	k8s := &k8sServiceProxy{
-		pathHandlers:   make(map[string]http.Handler),
+		pathHandlers:   make(map[string][]http.Handler),
 		services:       make(map[string]*svcEndpoint),
 		endpoints:      make(map[string]*endpointData),
 		defaultHandler: mux,

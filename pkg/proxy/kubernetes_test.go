@@ -41,7 +41,7 @@ func makeTestURL(svc *v1.Service, endpoint *svcEndpoint) *url.URL {
 
 func newTestProxy(wg *sync.WaitGroup) (*k8sServiceProxy, *watch.FakeWatcher, *watch.FakeWatcher) {
 	k8s := &k8sServiceProxy{
-		pathHandlers:   make(map[string]http.Handler),
+		pathHandlers:   make(map[string][]http.Handler),
 		services:       make(map[string]*svcEndpoint),
 		endpoints:      make(map[string]*endpointData),
 		defaultHandler: http.NotFoundHandler(),
@@ -207,8 +207,11 @@ func TestServicePathSwap(t *testing.T) {
 	wg.Wait()
 
 	var paths []string
-	for path := range k8s.pathHandlers {
+	for path, hlist := range k8s.pathHandlers {
 		paths = append(paths, path)
+		if len(hlist) != 1 {
+			t.Error(path, len(hlist))
+		}
 	}
 	sort.Strings(paths)
 
@@ -299,6 +302,55 @@ func TestServiceAddPathConflict(t *testing.T) {
 
 	wg.Add(1)
 	svcWatcher.Modify(svcA)
+
+	svcWatcher.Stop()
+	wg.Wait()
+
+	var paths []string
+	for path := range k8s.pathHandlers {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	expected := []string{
+		"prod/foo",
+		"staging/foo",
+	}
+	if !reflect.DeepEqual(paths, expected) {
+		t.Error(paths)
+	}
+}
+
+func TestServiceAddPathConflict2(t *testing.T) {
+	var wg sync.WaitGroup
+	k8s, svcWatcher, endpointWatcher := newTestProxy(&wg)
+
+	svcA := &v1.Service{
+		ObjectMeta: v1.ObjectMeta{
+			Namespace:   "namespace-a",
+			Name:        "foo",
+			Annotations: map[string]string{SvcProxyAnnotationPath: "prod/foo"},
+		},
+	}
+	svcB := &v1.Service{
+		ObjectMeta: v1.ObjectMeta{
+			Namespace:   "namespace-b",
+			Name:        "foo",
+			Annotations: map[string]string{SvcProxyAnnotationPath: "prod/foo"},
+		},
+	}
+
+	svcWatcher.Add(svcA)
+	svcWatcher.Add(svcB)
+	svcWatcher.Stop()
+	wg.Wait()
+
+	svcB.ObjectMeta.Annotations[SvcProxyAnnotationPath] = "staging/foo"
+	svcWatcher = watch.NewFake()
+	go runTest(k8s, svcWatcher, endpointWatcher, &wg)
+
+	wg.Add(1)
+	svcWatcher.Modify(svcB)
 
 	svcWatcher.Stop()
 	wg.Wait()
