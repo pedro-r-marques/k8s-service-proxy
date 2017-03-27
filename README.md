@@ -1,6 +1,7 @@
 # k8s-service-proxy
 
 [![Build Status](https://travis-ci.org/pedro-r-marques/k8s-service-proxy.svg?branch=master)](https://travis-ci.org/pedro-r-marques/k8s-service-proxy)
+[![Go Report Card](https://goreportcard.com/badge/github.com/pedro-r-marques/k8s-service-proxy)](https://goreportcard.com/report/github.com/pedro-r-marques/k8s-service-proxy)
 
 HTTP Proxy for kubernetes services
 
