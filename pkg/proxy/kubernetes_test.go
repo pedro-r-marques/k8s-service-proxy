@@ -88,21 +88,21 @@ func TestServiceDelete(t *testing.T) {
 	k8s, watcher, _ := newTestProxy(&wg)
 
 	services := []*v1.Service{
-		&v1.Service{
+		{
 			ObjectMeta: v1.ObjectMeta{
 				Namespace:   "default",
 				Name:        "foo",
 				Annotations: map[string]string{SvcProxyAnnotationPath: "xxx"},
 			},
 		},
-		&v1.Service{
+		{
 			ObjectMeta: v1.ObjectMeta{
 				Namespace:   "default",
 				Name:        "bar",
 				Annotations: map[string]string{SvcProxyAnnotationPath: "xxy"},
 			},
 			Spec: v1.ServiceSpec{
-				Ports: []v1.ServicePort{v1.ServicePort{Port: 8080}},
+				Ports: []v1.ServicePort{{Port: 8080}},
 			},
 		},
 	}
@@ -435,9 +435,9 @@ func TestEndpointAddDelete(t *testing.T) {
 			Name:      "foo",
 		},
 		Subsets: []v1.EndpointSubset{
-			v1.EndpointSubset{
+			{
 				Addresses: []v1.EndpointAddress{
-					v1.EndpointAddress{
+					{
 						IP: "127.0.0.1",
 						TargetRef: &v1.ObjectReference{
 							Kind: "Pod",
@@ -446,9 +446,9 @@ func TestEndpointAddDelete(t *testing.T) {
 					},
 				},
 			},
-			v1.EndpointSubset{
+			{
 				NotReadyAddresses: []v1.EndpointAddress{
-					v1.EndpointAddress{
+					{
 						IP: "8.8.8.8",
 						TargetRef: &v1.ObjectReference{
 							Kind: "Pod",
@@ -523,9 +523,9 @@ func TestEndpointProxy(t *testing.T) {
 			Name:      "foo",
 		},
 		Subsets: []v1.EndpointSubset{
-			v1.EndpointSubset{
+			{
 				Addresses: []v1.EndpointAddress{
-					v1.EndpointAddress{
+					{
 						IP: "127.0.0.1",
 						TargetRef: &v1.ObjectReference{
 							Kind: "Pod",
