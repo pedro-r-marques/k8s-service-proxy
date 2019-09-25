@@ -12,8 +12,9 @@ import (
 	"sync"
 	"testing"
 
-	"k8s.io/client-go/1.4/pkg/api/v1"
-	"k8s.io/client-go/1.4/pkg/watch"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/watch"
 )
 
 func runTest(k8s *k8sServiceProxy, svcWatcher, endpointWatcher watch.Interface, wg *sync.WaitGroup) {
@@ -63,12 +64,12 @@ func TestServiceAdd(t *testing.T) {
 
 	watcher.Add(
 		&v1.Service{
-			ObjectMeta: v1.ObjectMeta{Namespace: "default", Name: "foo"},
+			ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "foo"},
 		})
 
 	watcher.Add(
 		&v1.Service{
-			ObjectMeta: v1.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Namespace:   "default",
 				Name:        "bar",
 				Annotations: map[string]string{SvcProxyAnnotationPath: "xxx"},
@@ -89,14 +90,14 @@ func TestServiceDelete(t *testing.T) {
 
 	services := []*v1.Service{
 		{
-			ObjectMeta: v1.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Namespace:   "default",
 				Name:        "foo",
 				Annotations: map[string]string{SvcProxyAnnotationPath: "xxx"},
 			},
 		},
 		{
-			ObjectMeta: v1.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Namespace:   "default",
 				Name:        "bar",
 				Annotations: map[string]string{SvcProxyAnnotationPath: "xxy"},
@@ -113,7 +114,7 @@ func TestServiceDelete(t *testing.T) {
 
 	watcher.Delete(
 		&v1.Service{
-			ObjectMeta: v1.ObjectMeta{Namespace: "default", Name: "foo"},
+			ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "foo"},
 		})
 
 	watcher.Stop()
@@ -137,7 +138,7 @@ func TestServiceChange(t *testing.T) {
 	k8s, svcWatcher, endpointWatcher := newTestProxy(&wg)
 
 	svc := &v1.Service{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   "default",
 			Name:        "foo",
 			Annotations: map[string]string{SvcProxyAnnotationPath: "xxx"},
@@ -175,14 +176,14 @@ func TestServicePathSwap(t *testing.T) {
 	k8s, svcWatcher, endpointWatcher := newTestProxy(&wg)
 
 	svcA := &v1.Service{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   "namespace-a",
 			Name:        "foo",
 			Annotations: map[string]string{SvcProxyAnnotationPath: "prod/foo"},
 		},
 	}
 	svcB := &v1.Service{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   "namespace-b",
 			Name:        "foo",
 			Annotations: map[string]string{SvcProxyAnnotationPath: "staging/foo"},
@@ -229,14 +230,14 @@ func TestServicePathChangeDelete(t *testing.T) {
 	k8s, svcWatcher, endpointWatcher := newTestProxy(&wg)
 
 	svcA := &v1.Service{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   "namespace-a",
 			Name:        "foo",
 			Annotations: map[string]string{SvcProxyAnnotationPath: "prod/foo"},
 		},
 	}
 	svcB := &v1.Service{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   "namespace-b",
 			Name:        "foo",
 			Annotations: map[string]string{SvcProxyAnnotationPath: "staging/foo"},
@@ -277,14 +278,14 @@ func TestServiceAddPathConflict(t *testing.T) {
 	k8s, svcWatcher, endpointWatcher := newTestProxy(&wg)
 
 	svcA := &v1.Service{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   "namespace-a",
 			Name:        "foo",
 			Annotations: map[string]string{SvcProxyAnnotationPath: "prod/foo"},
 		},
 	}
 	svcB := &v1.Service{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   "namespace-b",
 			Name:        "foo",
 			Annotations: map[string]string{SvcProxyAnnotationPath: "prod/foo"},
@@ -326,14 +327,14 @@ func TestServiceAddPathConflict2(t *testing.T) {
 	k8s, svcWatcher, endpointWatcher := newTestProxy(&wg)
 
 	svcA := &v1.Service{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   "namespace-a",
 			Name:        "foo",
 			Annotations: map[string]string{SvcProxyAnnotationPath: "prod/foo"},
 		},
 	}
 	svcB := &v1.Service{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   "namespace-b",
 			Name:        "foo",
 			Annotations: map[string]string{SvcProxyAnnotationPath: "prod/foo"},
@@ -384,7 +385,7 @@ func TestMapProxy(t *testing.T) {
 	k8s, watcher, _ := newTestProxy(&wg)
 	watcher.Add(
 		&v1.Service{
-			ObjectMeta: v1.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Namespace: "default",
 				Name:      "foo",
 				Annotations: map[string]string{
@@ -422,7 +423,7 @@ func TestEndpointAddDelete(t *testing.T) {
 	k8s, svcWatch, endpointWatch := newTestProxy(&wg)
 
 	svc := &v1.Service{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   "default",
 			Name:        "foo",
 			Annotations: map[string]string{SvcProxyAnnotationEndpoint: "8080"},
@@ -430,7 +431,7 @@ func TestEndpointAddDelete(t *testing.T) {
 	}
 
 	endpoints := &v1.Endpoints{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "default",
 			Name:      "foo",
 		},
@@ -510,7 +511,7 @@ func TestEndpointProxy(t *testing.T) {
 	k8s, svcWatch, endpointWatch := newTestProxy(&wg)
 
 	svc := &v1.Service{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   "default",
 			Name:        "foo",
 			Annotations: map[string]string{SvcProxyAnnotationEndpoint: backendAddrPieces[1]},
@@ -518,7 +519,7 @@ func TestEndpointProxy(t *testing.T) {
 	}
 
 	endpoints := &v1.Endpoints{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "default",
 			Name:      "foo",
 		},

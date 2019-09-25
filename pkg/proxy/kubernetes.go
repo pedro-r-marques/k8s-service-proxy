@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
-	"k8s.io/client-go/1.4/kubernetes"
-	"k8s.io/client-go/1.4/pkg/api"
-	"k8s.io/client-go/1.4/pkg/api/v1"
-	"k8s.io/client-go/1.4/pkg/watch"
-	"k8s.io/client-go/1.4/rest"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 // SvcProxyHTTPPath is the http request path served by the proxy itself.
@@ -513,11 +513,11 @@ func (k *k8sServiceProxy) runOnce(svcWatcher, endpointWatcher watch.Interface) b
 const maxWatcherFailures = 3
 
 func createWatchers(clientset *kubernetes.Clientset) (watch.Interface, watch.Interface, error) {
-	svcWatcher, err := clientset.Core().Services("").Watch(api.ListOptions{})
+	svcWatcher, err := clientset.CoreV1().Services("").Watch(metav1.ListOptions{})
 	if err != nil {
 		return nil, nil, err
 	}
-	endpointWatcher, err := clientset.Core().Endpoints("").Watch(api.ListOptions{})
+	endpointWatcher, err := clientset.CoreV1().Endpoints("").Watch(metav1.ListOptions{})
 	if err != nil {
 		return nil, nil, err
 	}
