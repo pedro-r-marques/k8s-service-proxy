@@ -95,13 +95,31 @@ func requestMapper(endpoint *svcEndpoint, target *url.URL, req *http.Request) {
 	}
 }
 
+func invRemap(endpoint *svcEndpoint, target *url.URL, pathValues []string) []string {
+	var result []string
+	for _, path := range pathValues {
+		if !strings.HasPrefix(path, endpoint.Map) {
+			continue
+		}
+		result = append(result, endpoint.Path+path[len(endpoint.Map):])
+	}
+	return result
+}
+
 func (k *k8sServiceProxy) newProxyHandler(target *url.URL, endpoint *svcEndpoint) http.Handler {
 	var proxy http.Handler
 	if endpoint.Map != "" {
 		director := func(req *http.Request) {
 			requestMapper(endpoint, target, req)
 		}
-		proxy = &httputil.ReverseProxy{Director: director}
+		headerRemapper := func(resp *http.Response) error {
+			if location, ok := resp.Header["Location"]; ok {
+				resp.Header["Location"] = invRemap(endpoint, target, location)
+			}
+			return nil
+		}
+		proxy = &httputil.ReverseProxy{
+			Director: director, ModifyResponse: headerRemapper}
 	} else {
 		proxy = httputil.NewSingleHostReverseProxy(target)
 	}
