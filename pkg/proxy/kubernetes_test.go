@@ -583,3 +583,43 @@ func TestEndpointProxy(t *testing.T) {
 	}
 
 }
+
+func TestMappedRedirect(t *testing.T) {
+	server := httptest.NewServer(http.RedirectHandler("index.html", http.StatusSeeOther))
+	defer server.Close()
+
+	backendAddr := server.Listener.Addr()
+	backendAddrPieces := strings.Split(backendAddr.String(), ":")
+
+	var wg sync.WaitGroup
+	k8s, watcher, _ := newTestProxy(&wg)
+	watcher.Add(
+		&v1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "default",
+				Name:      "foo",
+				Annotations: map[string]string{
+					SvcProxyAnnotationPath: "/foo/",
+					SvcProxyAnnotationPort: backendAddrPieces[1],
+					SvcProxyAnnotationMap:  "/bar/",
+				},
+			},
+		})
+
+	watcher.Stop()
+	wg.Wait()
+
+	rec := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/foo/", nil)
+	k8s.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Error(resp.StatusCode)
+	}
+
+	location := resp.Header.Get("Location")
+	if location != "/foo/index.html" {
+		t.Error(location)
+	}
+}
