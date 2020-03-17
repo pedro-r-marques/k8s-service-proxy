@@ -419,6 +419,53 @@ func TestMapProxy(t *testing.T) {
 	}
 }
 
+func TestMapProxyVarSubst(t *testing.T) {
+	var pathlist []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pathlist = append(pathlist, r.URL.Path)
+	}))
+	defer server.Close()
+
+	backendAddr := server.Listener.Addr()
+	backendAddrPieces := strings.Split(backendAddr.String(), ":")
+
+	var wg sync.WaitGroup
+	k8s, watcher, _ := newTestProxy(&wg)
+	watcher.Add(
+		&v1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "default",
+				Name:      "svc",
+				Annotations: map[string]string{
+					SvcProxyAnnotationPath: "/${NAMESPACE}/${NAME}/",
+					SvcProxyAnnotationPort: backendAddrPieces[1],
+					SvcProxyAnnotationMap:  "/",
+				},
+			},
+		})
+
+	watcher.Stop()
+	wg.Wait()
+
+	expected := []string{"/", "/index.html"}
+
+	requestPaths := []string{
+		"http://example.com/default/svc",
+		"http://example.com/default/svc/",
+		"http://example.com/default/svc/index.html",
+	}
+	for _, p := range requestPaths {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", p, nil)
+		k8s.ServeHTTP(w, req)
+		log.Printf("%s: %d", p, w.Code)
+	}
+
+	if !reflect.DeepEqual(expected, pathlist) {
+		t.Error(pathlist)
+	}
+}
+
 func TestEndpointAddDelete(t *testing.T) {
 	var wg sync.WaitGroup
 	k8s, svcWatch, endpointWatch := newTestProxy(&wg)

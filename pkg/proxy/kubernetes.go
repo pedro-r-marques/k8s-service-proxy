@@ -302,6 +302,11 @@ func makeSvcEndpoint(svc *v1.Service) *svcEndpoint {
 	if strings.HasPrefix(path, SvcProxyHTTPPath) {
 		return nil
 	}
+	vars := map[string]string{
+		"NAME":      svc.Name,
+		"NAMESPACE": svc.Namespace,
+	}
+	path = ExpandVars(vars, path)
 	endpoint := &svcEndpoint{
 		Path: path,
 		Port: -1,
