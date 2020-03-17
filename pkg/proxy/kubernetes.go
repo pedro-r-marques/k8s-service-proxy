@@ -96,14 +96,28 @@ func requestMapper(endpoint *svcEndpoint, target *url.URL, req *http.Request) {
 	}
 }
 
-func invRemap(endpoint *svcEndpoint, target *url.URL, pathValues []string) []string {
+func invRemap(endpoint *svcEndpoint, requestURL *url.URL, pathValues []string) []string {
 	var result []string
 	for _, upath := range pathValues {
-		if !strings.HasPrefix(upath, endpoint.Map) {
+		base, err := url.Parse(requestURL.Path)
+		if err != nil {
+			log.Printf("Unable to parse %s: %v", requestURL.Path, err)
 			continue
 		}
-		result = append(result, path.Join(endpoint.Path, upath[len(endpoint.Map):]))
+		u, err := url.Parse(upath)
+		if err != nil {
+			log.Printf("Unable to parse %s: %v", upath, err)
+			continue
+		}
+		r := base.ResolveReference(u)
+
+		if !strings.HasPrefix(r.Path, endpoint.Map) {
+			continue
+		}
+		offset := len(endpoint.Map)
+		result = append(result, path.Join(endpoint.Path, r.Path[offset:]))
 	}
+
 	return result
 }
 
@@ -115,8 +129,11 @@ func (k *k8sServiceProxy) newProxyHandler(target *url.URL, endpoint *svcEndpoint
 		}
 		headerRemapper := func(resp *http.Response) error {
 			if location, ok := resp.Header["Location"]; ok {
-				resp.Header["Location"] = invRemap(endpoint, target, location)
-				fmt.Println("Location", location, resp.Header["Location"])
+				nloc := invRemap(endpoint, resp.Request.URL, location)
+				if len(nloc) == 0 {
+					return fmt.Errorf("Unable to remap %s %s", resp.Request.URL.String(), location)
+				}
+				resp.Header["Location"] = nloc
 			}
 			return nil
 		}
