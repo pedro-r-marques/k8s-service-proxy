@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path"
 	"reflect"
 	"sort"
 	"strconv"
@@ -97,11 +98,11 @@ func requestMapper(endpoint *svcEndpoint, target *url.URL, req *http.Request) {
 
 func invRemap(endpoint *svcEndpoint, target *url.URL, pathValues []string) []string {
 	var result []string
-	for _, path := range pathValues {
-		if !strings.HasPrefix(path, endpoint.Map) {
+	for _, upath := range pathValues {
+		if !strings.HasPrefix(upath, endpoint.Map) {
 			continue
 		}
-		result = append(result, endpoint.Path+path[len(endpoint.Map):])
+		result = append(result, path.Join(endpoint.Path, upath[len(endpoint.Map):]))
 	}
 	return result
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path"
 	"reflect"
 	"sort"
 	"strings"
@@ -584,7 +585,7 @@ func TestEndpointProxy(t *testing.T) {
 
 }
 
-func TestMappedRedirect(t *testing.T) {
+func mapRedirectTest(t *testing.T, srcPath, dstPath string) {
 	server := httptest.NewServer(http.RedirectHandler("index.html", http.StatusSeeOther))
 	defer server.Close()
 
@@ -599,9 +600,9 @@ func TestMappedRedirect(t *testing.T) {
 				Namespace: "default",
 				Name:      "foo",
 				Annotations: map[string]string{
-					SvcProxyAnnotationPath: "/foo/",
+					SvcProxyAnnotationPath: srcPath,
 					SvcProxyAnnotationPort: backendAddrPieces[1],
-					SvcProxyAnnotationMap:  "/bar/",
+					SvcProxyAnnotationMap:  dstPath,
 				},
 			},
 		})
@@ -610,7 +611,7 @@ func TestMappedRedirect(t *testing.T) {
 	wg.Wait()
 
 	rec := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/foo/", nil)
+	req, _ := http.NewRequest("GET", srcPath, nil)
 	k8s.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -619,7 +620,25 @@ func TestMappedRedirect(t *testing.T) {
 	}
 
 	location := resp.Header.Get("Location")
-	if location != "/foo/index.html" {
-		t.Error(location)
+	expect := path.Join(srcPath, "index.html")
+	if location != expect {
+		t.Errorf("Expected %s, got %s", expect, location)
+	}
+}
+
+func TestMappedRedirect(t *testing.T) {
+	testCases := []struct {
+		srcPath string
+		dstPath string
+	}{
+		{"/foo/", "/bar/"},
+		{"/foo/bar/", "/"},
+		{"/foo", "/bar/"},
+	}
+	for _, test := range testCases {
+		name := fmt.Sprintf("%s => %s", test.srcPath, test.dstPath)
+		t.Run(name, func(t *testing.T) {
+			mapRedirectTest(t, test.srcPath, test.dstPath)
+		})
 	}
 }
