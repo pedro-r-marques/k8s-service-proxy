@@ -116,6 +116,7 @@ func (k *k8sServiceProxy) newProxyHandler(target *url.URL, endpoint *svcEndpoint
 		headerRemapper := func(resp *http.Response) error {
 			if location, ok := resp.Header["Location"]; ok {
 				resp.Header["Location"] = invRemap(endpoint, target, location)
+				fmt.Println("Location", location, resp.Header["Location"])
 			}
 			return nil
 		}
