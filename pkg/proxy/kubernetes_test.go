@@ -585,8 +585,24 @@ func TestEndpointProxy(t *testing.T) {
 
 }
 
-func mapRedirectTest(t *testing.T, srcPath, dstPath string) {
-	server := httptest.NewServer(http.RedirectHandler("index.html", http.StatusSeeOther))
+type relativeRedirectHandler struct {
+	url string
+}
+
+// redirect Handler that generates a relative rather than absolute path.
+func (hndl *relativeRedirectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h := w.Header()
+	h.Set("Location", hndl.url)
+	w.WriteHeader(http.StatusSeeOther)
+}
+
+func mapRedirectTest(t *testing.T, srcPath, dstPath string, relativeURL bool) {
+	handler := http.RedirectHandler("index.html", http.StatusSeeOther)
+	if relativeURL {
+		handler = &relativeRedirectHandler{"index.html"}
+	}
+
+	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	backendAddr := server.Listener.Addr()
@@ -628,17 +644,101 @@ func mapRedirectTest(t *testing.T, srcPath, dstPath string) {
 
 func TestMappedRedirect(t *testing.T) {
 	testCases := []struct {
-		srcPath string
-		dstPath string
+		srcPath     string
+		dstPath     string
+		relativeURL bool
 	}{
-		{"/foo/", "/bar/"},
-		{"/foo/bar/", "/"},
-		{"/foo", "/bar/"},
+		{"/foo/", "/bar/", false},
+		{"/foo/bar/", "/", false},
+		{"/foo", "/bar/", false},
+		{"/foo/", "/bar/", true},
+		{"/foo/bar/", "/", true},
+		{"/foo", "/bar/", true},
 	}
 	for _, test := range testCases {
 		name := fmt.Sprintf("%s => %s", test.srcPath, test.dstPath)
 		t.Run(name, func(t *testing.T) {
-			mapRedirectTest(t, test.srcPath, test.dstPath)
+			mapRedirectTest(t, test.srcPath, test.dstPath, test.relativeURL)
 		})
+	}
+}
+
+func TestMappedRedirectRelativeResolve(t *testing.T) {
+	handler := &relativeRedirectHandler{"../index.html"}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	backendAddr := server.Listener.Addr()
+	backendAddrPieces := strings.Split(backendAddr.String(), ":")
+
+	var wg sync.WaitGroup
+	k8s, watcher, _ := newTestProxy(&wg)
+	watcher.Add(
+		&v1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "default",
+				Name:      "foo",
+				Annotations: map[string]string{
+					SvcProxyAnnotationPath: "/foo/",
+					SvcProxyAnnotationPort: backendAddrPieces[1],
+					SvcProxyAnnotationMap:  "/bar/",
+				},
+			},
+		})
+
+	watcher.Stop()
+	wg.Wait()
+
+	rec := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/foo/x/", nil)
+	k8s.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Error(resp.StatusCode)
+	}
+
+	location := resp.Header.Get("Location")
+	expect := "/foo/index.html"
+	if location != expect {
+		t.Errorf("Expected %s, got %s", expect, location)
+	}
+}
+
+func TestMappedRedirectRelativeErr(t *testing.T) {
+	handler := &relativeRedirectHandler{"../index.html"}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	backendAddr := server.Listener.Addr()
+	backendAddrPieces := strings.Split(backendAddr.String(), ":")
+
+	var wg sync.WaitGroup
+	k8s, watcher, _ := newTestProxy(&wg)
+	watcher.Add(
+		&v1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "default",
+				Name:      "foo",
+				Annotations: map[string]string{
+					SvcProxyAnnotationPath: "/foo/",
+					SvcProxyAnnotationPort: backendAddrPieces[1],
+					SvcProxyAnnotationMap:  "/bar/",
+				},
+			},
+		})
+
+	watcher.Stop()
+	wg.Wait()
+
+	rec := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/foo/", nil)
+	k8s.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Error(resp.StatusCode)
 	}
 }
